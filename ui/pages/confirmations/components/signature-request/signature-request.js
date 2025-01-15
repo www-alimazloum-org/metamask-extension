@@ -8,7 +8,7 @@ import {
 } from 'react-redux';
 import PropTypes from 'prop-types';
 import { memoize } from 'lodash';
-import { ethErrors, serializeError } from 'eth-rpc-errors';
+import { providerErrors, serializeError } from '@metamask/rpc-errors';
 import {
   resolvePendingApproval,
   completedTx,
@@ -18,16 +18,14 @@ import {
   doesAddressRequireLedgerHidConnection,
   getSubjectMetadata,
   getTotalUnapprovedMessagesCount,
+  selectNetworkConfigurationByChainId,
   ///: BEGIN:ONLY_INCLUDE_IF(build-mmi)
   accountsWithSendEtherInfoSelector,
   getSelectedAccount,
   getAccountType,
   ///: END:ONLY_INCLUDE_IF
 } from '../../../../selectors';
-import {
-  getProviderConfig,
-  isAddressLedger,
-} from '../../../../ducks/metamask/metamask';
+import { isAddressLedger } from '../../../../ducks/metamask/metamask';
 import {
   sanitizeMessage,
   ///: BEGIN:ONLY_INCLUDE_IF(build-mmi)
@@ -75,9 +73,12 @@ import {
 
 ///: BEGIN:ONLY_INCLUDE_IF(build-mmi)
 import { useMMICustodySignMessage } from '../../../../hooks/useMMICustodySignMessage';
+import { AccountType } from '../../../../../shared/constants/custody';
 ///: END:ONLY_INCLUDE_IF
 import BlockaidBannerAlert from '../security-provider-banner-alert/blockaid-banner-alert/blockaid-banner-alert';
 import InsightWarnings from '../../../../components/app/snaps/insight-warnings';
+import { NetworkChangeToastLegacy } from '../confirm/network-change-toast';
+import { QueuedRequestsBannerAlert } from '../../confirmation/components/queued-requests-banner-alert';
 import Message from './signature-request-message';
 import Footer from './signature-request-footer';
 
@@ -94,6 +95,7 @@ const SignatureRequest = ({ txData, warnings }) => {
   const {
     id,
     type,
+    chainId,
     msgParams: { from, data, origin, version },
   } = txData;
 
@@ -101,7 +103,12 @@ const SignatureRequest = ({ txData, warnings }) => {
   const hardwareWalletRequiresConnection = useSelector((state) =>
     doesAddressRequireLedgerHidConnection(state, from),
   );
-  const { chainId, rpcPrefs } = useSelector(getProviderConfig);
+
+  const { blockExplorerUrls } = useSelector((state) =>
+    selectNetworkConfigurationByChainId(state, chainId),
+  );
+
+  const blockExplorerUrl = blockExplorerUrls?.[0];
   const unapprovedMessagesCount = useSelector(getTotalUnapprovedMessagesCount);
   const subjectMetadata = useSelector(getSubjectMetadata);
   const isLedgerWallet = useSelector((state) => isAddressLedger(state, from));
@@ -149,7 +156,7 @@ const SignatureRequest = ({ txData, warnings }) => {
 
   const onSign = async () => {
     ///: BEGIN:ONLY_INCLUDE_IF(build-mmi)
-    if (accountType === 'custody') {
+    if (accountType === AccountType.CUSTODY) {
       await custodySignFn(txData);
     }
     ///: END:ONLY_INCLUDE_IF
@@ -173,7 +180,7 @@ const SignatureRequest = ({ txData, warnings }) => {
     await dispatch(
       rejectPendingApproval(
         id,
-        serializeError(ethErrors.provider.userRejectedRequest()),
+        serializeError(providerErrors.userRejectedRequest()),
       ),
     );
     trackEvent({
@@ -211,6 +218,7 @@ const SignatureRequest = ({ txData, warnings }) => {
             marginRight={4}
             marginBottom={4}
           />
+          <QueuedRequestsBannerAlert />
           {(txData?.securityProviderResponse?.flagAsDangerous !== undefined &&
             txData?.securityProviderResponse?.flagAsDangerous !==
               SECURITY_PROVIDER_MESSAGE_SEVERITY.NOT_MALICIOUS) ||
@@ -309,6 +317,7 @@ const SignatureRequest = ({ txData, warnings }) => {
           messageRootRef={messageRootRef}
           messageIsScrollable={messageIsScrollable}
           primaryType={primaryType}
+          chainId={chainId}
         />
         <Footer
           cancelAction={onCancel}
@@ -332,7 +341,7 @@ const SignatureRequest = ({ txData, warnings }) => {
           <ContractDetailsModal
             toAddress={verifyingContract}
             chainId={chainId}
-            rpcPrefs={rpcPrefs}
+            blockExplorerUrl={blockExplorerUrl}
             onClose={() => setShowContractDetails(false)}
             isContractRequestingSignature
           />
@@ -360,6 +369,7 @@ const SignatureRequest = ({ txData, warnings }) => {
           }}
         />
       )}
+      <NetworkChangeToastLegacy confirmation={txData} />
     </>
   );
 };

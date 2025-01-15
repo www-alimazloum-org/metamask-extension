@@ -1,5 +1,5 @@
 import { TransactionType } from '@metamask/transaction-controller';
-import React, { Dispatch, SetStateAction, useContext } from 'react';
+import React, { useContext } from 'react';
 import { useSelector } from 'react-redux';
 import {
   MetaMetricsEventCategory,
@@ -28,8 +28,6 @@ import Tooltip from '../../../../../components/ui/tooltip/tooltip';
 import { MetaMetricsContext } from '../../../../../contexts/metametrics';
 import {
   AlignItems,
-  BackgroundColor,
-  BorderRadius,
   Display,
   FlexDirection,
   FontWeight,
@@ -39,32 +37,29 @@ import {
   TextVariant,
 } from '../../../../../helpers/constants/design-system';
 import { useI18nContext } from '../../../../../hooks/useI18nContext';
-import {
-  currentConfirmationSelector,
-  getUseBlockie,
-} from '../../../../../selectors';
+import { getUseBlockie } from '../../../../../selectors';
+import { useConfirmContext } from '../../../context/confirm';
 import { useBalance } from '../../../hooks/useBalance';
 import useConfirmationRecipientInfo from '../../../hooks/useConfirmationRecipientInfo';
-import { REDESIGN_TRANSACTION_TYPES } from '../../../utils';
 import { SignatureRequestType } from '../../../types/confirm';
-import { isSignatureTransactionType } from '../../../utils/confirm';
+import {
+  isSignatureTransactionType,
+  REDESIGN_DEV_TRANSACTION_TYPES,
+} from '../../../utils/confirm';
+import { AdvancedDetailsButton } from './advanced-details-button';
 
-const HeaderInfo = ({
-  showAdvancedDetails,
-  setShowAdvancedDetails,
-}: {
-  showAdvancedDetails: boolean;
-  setShowAdvancedDetails: Dispatch<SetStateAction<boolean>>;
-}) => {
+const HeaderInfo = () => {
+  const trackEvent = useContext(MetaMetricsContext);
+
   const useBlockie = useSelector(getUseBlockie);
   const [showAccountInfo, setShowAccountInfo] = React.useState(false);
 
-  const currentConfirmation = useSelector(currentConfirmationSelector);
+  const { currentConfirmation } = useConfirmContext();
+
   const { senderAddress: fromAddress, senderName: fromName } =
     useConfirmationRecipientInfo();
 
   const t = useI18nContext();
-  const trackEvent = useContext(MetaMetricsContext);
 
   const { balance: balanceToUse } = useBalance(fromAddress);
 
@@ -94,7 +89,7 @@ const HeaderInfo = ({
     trackEvent(event);
   }
 
-  const isShowAdvancedDetailsToggle = REDESIGN_TRANSACTION_TYPES.includes(
+  const isShowAdvancedDetailsToggle = REDESIGN_DEV_TRANSACTION_TYPES.includes(
     currentConfirmation?.type as TransactionType,
   );
 
@@ -120,27 +115,7 @@ const HeaderInfo = ({
             data-testid="header-info__account-details-button"
           />
         </Tooltip>
-        {isShowAdvancedDetailsToggle && (
-          <Box
-            backgroundColor={
-              showAdvancedDetails
-                ? BackgroundColor.infoMuted
-                : BackgroundColor.transparent
-            }
-            borderRadius={BorderRadius.MD}
-          >
-            <ButtonIcon
-              ariaLabel={'Advanced tx details'}
-              color={IconColor.iconDefault}
-              iconName={IconName.Customize}
-              data-testid="header-advanced-details-button"
-              size={ButtonIconSize.Md}
-              onClick={() => {
-                setShowAdvancedDetails(!showAdvancedDetails);
-              }}
-            />
-          </Box>
-        )}
+        {isShowAdvancedDetailsToggle && <AdvancedDetailsButton />}
       </Box>
       <Modal
         isOpen={showAccountInfo}

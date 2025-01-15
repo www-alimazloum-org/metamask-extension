@@ -6,18 +6,23 @@ import { useSelector } from 'react-redux';
 import { EtherDenomination } from '../../../../../../../shared/constants/common';
 import {
   addHexes,
-  getEthConversionFromWeiHex,
+  decGWEIToHexWEI,
+  decimalToHex,
   getValueFromWeiHex,
   multiplyHexes,
 } from '../../../../../../../shared/modules/conversion.utils';
-import { getConversionRate } from '../../../../../../ducks/metamask/metamask';
+import { Numeric } from '../../../../../../../shared/modules/Numeric';
 import { useFiatFormatter } from '../../../../../../hooks/useFiatFormatter';
 import { useGasFeeEstimates } from '../../../../../../hooks/useGasFeeEstimates';
-import { getCurrentCurrency } from '../../../../../../selectors';
+import {
+  getCurrentCurrency,
+  selectConversionRateByChainId,
+} from '../../../../../../selectors';
+import { getMultichainNetwork } from '../../../../../../selectors/multichain';
 import { HEX_ZERO } from '../shared/constants';
-import { getGasFeeEstimate } from './getGasFeesEstimate';
 import { useEIP1559TxFees } from './useEIP1559TxFees';
 import { useSupportsEIP1559 } from './useSupportsEIP1559';
+import { useTransactionGasFeeEstimate } from './useTransactionGasFeeEstimate';
 
 const EMPTY_FEE = '';
 const EMPTY_FEES = {
@@ -27,17 +32,25 @@ const EMPTY_FEES = {
 
 export function useFeeCalculations(transactionMeta: TransactionMeta) {
   const currentCurrency = useSelector(getCurrentCurrency);
-  const conversionRate = useSelector(getConversionRate);
+  const { chainId } = transactionMeta;
   const fiatFormatter = useFiatFormatter();
+
+  const conversionRate = useSelector((state) =>
+    selectConversionRateByChainId(state, chainId),
+  );
+
+  const multichainNetwork = useSelector(getMultichainNetwork);
+  const ticker = multichainNetwork?.network?.ticker;
 
   const getFeesFromHex = useCallback(
     (hexFee: string) => {
-      const nativeCurrencyFee =
-        getEthConversionFromWeiHex({
+      const nativeCurrencyFee = `${
+        getValueFromWeiHex({
           value: hexFee,
           fromCurrency: EtherDenomination.GWEI,
           numberOfDecimals: 4,
-        }) || `0 ${EtherDenomination.ETH}`;
+        }) || 0
+      } ${ticker}`;
 
       const currentCurrencyFee = fiatFormatter(
         Number(
@@ -59,7 +72,10 @@ export function useFeeCalculations(transactionMeta: TransactionMeta) {
   const { maxFeePerGas, maxPriorityFeePerGas } =
     useEIP1559TxFees(transactionMeta);
   const { supportsEIP1559 } = useSupportsEIP1559(transactionMeta);
-  const gasEstimate = getGasFeeEstimate(transactionMeta, supportsEIP1559);
+  const gasFeeEstimate = useTransactionGasFeeEstimate(
+    transactionMeta,
+    supportsEIP1559,
+  );
 
   const { gasFeeEstimates } = useGasFeeEstimates(
     transactionMeta.networkClientId,
@@ -78,8 +94,8 @@ export function useFeeCalculations(transactionMeta: TransactionMeta) {
 
   // L2 fee
   const feesL2 = useMemo(
-    () => (hasLayer1GasFee ? getFeesFromHex(gasEstimate) : EMPTY_FEES),
-    [gasEstimate],
+    () => (hasLayer1GasFee ? getFeesFromHex(gasFeeEstimate) : EMPTY_FEES),
+    [gasFeeEstimate],
   );
 
   // Max fee
@@ -90,29 +106,39 @@ export function useFeeCalculations(transactionMeta: TransactionMeta) {
   const gasPrice = transactionMeta?.txParams?.gasPrice || HEX_ZERO;
 
   const maxFee = useMemo(() => {
-    if (supportsEIP1559) {
-      return multiplyHexes(maxFeePerGas as Hex, gasLimit as Hex);
-    }
-    return multiplyHexes(gasPrice as Hex, gasLimit as Hex);
+    return multiplyHexes(
+      supportsEIP1559 ? (decimalToHex(maxFeePerGas) as Hex) : (gasPrice as Hex),
+      gasLimit as Hex,
+    );
   }, [supportsEIP1559, maxFeePerGas, gasLimit, gasPrice]);
 
-  const { currentCurrencyFee: maxFiatFee, nativeCurrencyFee: maxNativeFee } =
+  const { currentCurrencyFee: maxFeeFiat, nativeCurrencyFee: maxFeeNative } =
     getFeesFromHex(maxFee);
 
   // Estimated fee
   const estimatedFees = useMemo(() => {
     if (hasLayer1GasFee) {
       // Logic for L2 transactions with L1 and L2 fee components
-      const estimatedTotalFeesForL2 = addHexes(gasEstimate, layer1GasFee);
+      const estimatedTotalFeesForL2 = addHexes(gasFeeEstimate, layer1GasFee);
 
       return getFeesFromHex(estimatedTotalFeesForL2);
     }
 
     // Logic for any network without L1 and L2 fee components
-    const minimumFeePerGas = addHexes(
-      estimatedBaseFee || HEX_ZERO,
-      maxPriorityFeePerGas,
+    let minimumFeePerGas = addHexes(
+      decGWEIToHexWEI(estimatedBaseFee) || HEX_ZERO,
+      decimalToHex(maxPriorityFeePerGas),
     );
+
+    // `minimumFeePerGas` should never be higher than the `maxFeePerGas`
+    if (
+      new Numeric(minimumFeePerGas, 16).greaterThan(
+        decimalToHex(maxFeePerGas),
+        16,
+      )
+    ) {
+      minimumFeePerGas = decimalToHex(maxFeePerGas);
+    }
 
     const estimatedFee = multiplyHexes(
       supportsEIP1559 ? (minimumFeePerGas as Hex) : (gasPrice as Hex),
@@ -120,16 +146,16 @@ export function useFeeCalculations(transactionMeta: TransactionMeta) {
     );
 
     return getFeesFromHex(estimatedFee);
-  }, [gasEstimate, transactionMeta, estimatedBaseFee, getFeesFromHex]);
+  }, [gasFeeEstimate, transactionMeta, estimatedBaseFee, getFeesFromHex]);
 
   return {
-    estimatedFiatFee: estimatedFees.currentCurrencyFee,
-    estimatedNativeFee: estimatedFees.nativeCurrencyFee,
-    l1FiatFee: feesL1.currentCurrencyFee,
-    l1NativeFee: feesL1.nativeCurrencyFee,
-    l2FiatFee: feesL2.currentCurrencyFee,
-    l2NativeFee: feesL2.nativeCurrencyFee,
-    maxFiatFee,
-    maxNativeFee,
+    estimatedFeeFiat: estimatedFees.currentCurrencyFee,
+    estimatedFeeNative: estimatedFees.nativeCurrencyFee,
+    l1FeeFiat: feesL1.currentCurrencyFee,
+    l1FeeNative: feesL1.nativeCurrencyFee,
+    l2FeeFiat: feesL2.currentCurrencyFee,
+    l2FeeNative: feesL2.nativeCurrencyFee,
+    maxFeeFiat,
+    maxFeeNative,
   };
 }

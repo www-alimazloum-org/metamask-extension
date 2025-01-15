@@ -8,21 +8,17 @@ import {
   IconColor,
   TextColor,
 } from '../../../../../helpers/constants/design-system';
-import { Box, ButtonIcon, IconName, Text } from '../../../../component-library';
+import {
+  Box,
+  ButtonIcon,
+  ButtonIconSize,
+  IconName,
+  Text,
+} from '../../../../component-library';
 import Tooltip from '../../../../ui/tooltip';
 
-const InfoText = ({
-  isEllipsis,
-  text,
-}: {
-  isEllipsis: boolean;
-  text: string;
-}) => (
-  <Text
-    color={TextColor.inherit}
-    style={isEllipsis ? {} : { whiteSpace: 'pre-wrap' }}
-    ellipsis={isEllipsis}
-  >
+const InfoText = ({ text }: { text: string }) => (
+  <Text color={TextColor.inherit} style={{ whiteSpace: 'pre-wrap' }}>
     {text}
   </Text>
 );
@@ -31,16 +27,18 @@ export type ConfirmInfoRowTextProps = {
   text: string;
   onEditClick?: () => void;
   editIconClassName?: string;
-  isEllipsis?: boolean;
   tooltip?: string;
+  'data-testid'?: string;
+  editIconDataTestId?: string;
 };
 
 export const ConfirmInfoRowText: React.FC<ConfirmInfoRowTextProps> = ({
   text,
   onEditClick,
-  isEllipsis = false,
   editIconClassName,
   tooltip,
+  'data-testid': dataTestId,
+  editIconDataTestId,
 }) => {
   const t = useContext(I18nContext);
 
@@ -48,6 +46,7 @@ export const ConfirmInfoRowText: React.FC<ConfirmInfoRowTextProps> = ({
 
   return (
     <Box
+      data-testid={dataTestId}
       display={Display.Flex}
       alignItems={AlignItems.center}
       flexWrap={FlexWrap.Wrap}
@@ -61,19 +60,22 @@ export const ConfirmInfoRowText: React.FC<ConfirmInfoRowTextProps> = ({
           wrapperStyle={{ minWidth: 0 }}
           interactive
         >
-          <InfoText isEllipsis={isEllipsis} text={text} />
+          <InfoText text={text} />
         </Tooltip>
       ) : (
-        <InfoText isEllipsis={isEllipsis} text={text} />
+        <InfoText text={text} />
       )}
       {isEditable ? (
         <ButtonIcon
           className={editIconClassName || undefined}
           color={IconColor.primaryDefault}
           ariaLabel={t('edit')}
-          marginLeft={4}
           iconName={IconName.Edit}
           onClick={onEditClick}
+          size={ButtonIconSize.Sm}
+          // to reset the button padding
+          style={{ marginLeft: '-4px' }}
+          data-testid={editIconDataTestId}
         />
       ) : null}
     </Box>

@@ -18,12 +18,15 @@ import {
   handlePPOMError,
   validateRequestWithPPOM,
 } from '../ppom/ppom-util';
-import { SecurityAlertResponse } from '../ppom/types';
 import {
-  LOADING_SECURITY_ALERT_RESPONSE,
+  SecurityAlertResponse,
+  UpdateSecurityAlertResponse,
+} from '../ppom/types';
+import {
+  SECURITY_ALERT_RESPONSE_CHECKING_CHAIN,
   SECURITY_PROVIDER_EXCLUDED_TRANSACTION_TYPES,
-  SECURITY_PROVIDER_SUPPORTED_CHAIN_IDS,
 } from '../../../../shared/constants/security-provider';
+import { endTrace, TraceName } from '../../../../shared/lib/trace';
 
 export type AddTransactionOptions = NonNullable<
   Parameters<TransactionController['addTransaction']>[1]
@@ -37,12 +40,9 @@ type BaseAddTransactionRequest = {
   selectedAccount: InternalAccount;
   transactionParams: TransactionParams;
   transactionController: TransactionController;
-  updateSecurityAlertResponse: (
-    method: string,
-    securityAlertId: string,
-    securityAlertResponse: SecurityAlertResponse,
-  ) => void;
+  updateSecurityAlertResponse: UpdateSecurityAlertResponse;
   userOperationController: UserOperationController;
+  internalAccounts: InternalAccount[];
 };
 
 type FinalAddTransactionRequest = BaseAddTransactionRequest & {
@@ -64,7 +64,7 @@ export async function addDappTransaction(
 ): Promise<string> {
   const { dappRequest } = request;
   const { id: actionId, method, origin } = dappRequest;
-  const { securityAlertResponse } = dappRequest;
+  const { securityAlertResponse, traceContext } = dappRequest;
 
   const transactionOptions: AddTransactionOptions = {
     actionId,
@@ -75,18 +75,27 @@ export async function addDappTransaction(
     securityAlertResponse,
   };
 
+  endTrace({ name: TraceName.Middleware, id: actionId });
+
   const { waitForHash } = await addTransactionOrUserOperation({
     ...request,
-    transactionOptions,
+    transactionOptions: {
+      ...transactionOptions,
+      traceContext,
+    },
   });
 
-  return (await waitForHash()) as string;
+  const hash = (await waitForHash()) as string;
+
+  endTrace({ name: TraceName.Transaction, id: actionId });
+
+  return hash;
 }
 
 export async function addTransaction(
   request: AddTransactionRequest,
 ): Promise<TransactionMeta> {
-  validateSecurity(request);
+  await validateSecurity(request);
 
   const { transactionMeta, waitForHash } = await addTransactionOrUserOperation(
     request,
@@ -215,7 +224,7 @@ function getTransactionByHash(
   );
 }
 
-function validateSecurity(request: AddTransactionRequest) {
+async function validateSecurity(request: AddTransactionRequest) {
   const {
     chainId,
     ppomController,
@@ -223,6 +232,7 @@ function validateSecurity(request: AddTransactionRequest) {
     transactionOptions,
     transactionParams,
     updateSecurityAlertResponse,
+    internalAccounts,
   } = request;
 
   const { type } = transactionOptions;
@@ -232,10 +242,15 @@ function validateSecurity(request: AddTransactionRequest) {
       type as TransactionType,
     );
 
+  if (!securityAlertsEnabled || typeIsExcludedFromPPOM) {
+    return;
+  }
+
   if (
-    !securityAlertsEnabled ||
-    !SECURITY_PROVIDER_SUPPORTED_CHAIN_IDS.includes(chainId) ||
-    typeIsExcludedFromPPOM
+    internalAccounts.some(
+      ({ address }) =>
+        address.toLowerCase() === transactionParams.to?.toLowerCase(),
+    )
   ) {
     return;
   }
@@ -251,35 +266,32 @@ function validateSecurity(request: AddTransactionRequest) {
       params: [
         {
           from,
-          to,
-          value,
-          data,
+          to: to ?? '',
+          value: value ?? '',
+          data: data ?? '',
         },
       ],
+      jsonrpc: '2.0' as const,
     };
 
     const securityAlertId = generateSecurityAlertId();
 
+    // Intentionally not awaited to avoid blocking the confirmation process while the validation occurs.
     validateRequestWithPPOM({
       ppomController,
       request: ppomRequest,
       securityAlertId,
       chainId,
-    }).then((securityAlertResponse) => {
-      updateSecurityAlertResponse(
-        ppomRequest.method,
-        securityAlertId,
-        securityAlertResponse,
-      );
+      updateSecurityAlertResponse,
     });
 
-    const loadingSecurityAlertResponse: SecurityAlertResponse = {
-      ...LOADING_SECURITY_ALERT_RESPONSE,
+    const securityAlertResponseCheckingChain: SecurityAlertResponse = {
+      ...SECURITY_ALERT_RESPONSE_CHECKING_CHAIN,
       securityAlertId,
     };
 
     request.transactionOptions.securityAlertResponse =
-      loadingSecurityAlertResponse;
+      securityAlertResponseCheckingChain;
   } catch (error) {
     handlePPOMError(error, 'Error validating JSON RPC using PPOM: ');
   }

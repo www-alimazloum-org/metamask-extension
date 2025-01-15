@@ -11,13 +11,18 @@ import { SignatureController } from '@metamask/signature-controller';
 import {
   BlockaidReason,
   BlockaidResultType,
+  LOADING_SECURITY_ALERT_RESPONSE,
+  SECURITY_ALERT_RESPONSE_CHAIN_NOT_SUPPORTED,
+  SECURITY_PROVIDER_SUPPORTED_CHAIN_IDS_FALLBACK_LIST,
   SecurityAlertSource,
 } from '../../../../shared/constants/security-provider';
 import { SIGNING_METHODS } from '../../../../shared/constants/transaction';
-import { AppStateController } from '../../controllers/app-state';
-import { SecurityAlertResponse } from './types';
+import { AppStateController } from '../../controllers/app-state-controller';
+import { SecurityAlertResponse, UpdateSecurityAlertResponse } from './types';
 import {
+  getSecurityAlertsAPISupportedChainIds,
   isSecurityAlertsAPIEnabled,
+  SecurityAlertsAPIRequest,
   validateWithSecurityAlertsAPI,
 } from './security-alerts-api';
 
@@ -30,30 +35,56 @@ const SECURITY_ALERT_RESPONSE_ERROR = {
   reason: BlockaidReason.errored,
 };
 
+type PPOMRequest = Omit<JsonRpcRequest, 'method' | 'params'> & {
+  method: typeof METHOD_SEND_TRANSACTION;
+  params: [TransactionParams];
+};
+
 export async function validateRequestWithPPOM({
   ppomController,
   request,
   securityAlertId,
   chainId,
+  updateSecurityAlertResponse: updateSecurityResponse,
 }: {
   ppomController: PPOMController;
   request: JsonRpcRequest;
   securityAlertId: string;
   chainId: Hex;
-}): Promise<SecurityAlertResponse> {
+  updateSecurityAlertResponse: UpdateSecurityAlertResponse;
+}) {
   try {
+    if (!(await isChainSupported(chainId))) {
+      await updateSecurityResponse(
+        request.method,
+        securityAlertId,
+        SECURITY_ALERT_RESPONSE_CHAIN_NOT_SUPPORTED,
+      );
+      return;
+    }
+
+    await updateSecurityResponse(
+      request.method,
+      securityAlertId,
+      LOADING_SECURITY_ALERT_RESPONSE,
+    );
+
     const normalizedRequest = normalizePPOMRequest(request);
 
     const ppomResponse = isSecurityAlertsAPIEnabled()
       ? await validateWithAPI(ppomController, chainId, normalizedRequest)
-      : await validateWithController(ppomController, normalizedRequest);
-
-    return {
-      ...ppomResponse,
-      securityAlertId,
-    };
+      : await validateWithController(
+          ppomController,
+          normalizedRequest,
+          chainId,
+        );
+    await updateSecurityResponse(request.method, securityAlertId, ppomResponse);
   } catch (error: unknown) {
-    return handlePPOMError(error, 'Error validating JSON RPC using PPOM: ');
+    await updateSecurityResponse(
+      request.method,
+      securityAlertId,
+      handlePPOMError(error, 'Error validating JSON RPC using PPOM: '),
+    );
   }
 }
 
@@ -86,12 +117,15 @@ export async function updateSecurityAlertResponse({
   );
 
   if (isSignatureRequest) {
-    appStateController.addSignatureSecurityAlertResponse(securityAlertResponse);
+    appStateController.addSignatureSecurityAlertResponse({
+      ...securityAlertResponse,
+      securityAlertId,
+    });
   } else {
-    transactionController.updateSecurityAlertResponse(
-      confirmation.id,
-      securityAlertResponse,
-    );
+    transactionController.updateSecurityAlertResponse(confirmation.id, {
+      ...securityAlertResponse,
+      securityAlertId,
+    } as SecurityAlertResponse);
   }
 }
 
@@ -111,12 +145,34 @@ export function handlePPOMError(
   };
 }
 
-function normalizePPOMRequest(request: JsonRpcRequest): JsonRpcRequest {
-  if (request.method !== METHOD_SEND_TRANSACTION) {
+export async function isChainSupported(chainId: Hex): Promise<boolean> {
+  let supportedChainIds = SECURITY_PROVIDER_SUPPORTED_CHAIN_IDS_FALLBACK_LIST;
+
+  try {
+    if (isSecurityAlertsAPIEnabled()) {
+      supportedChainIds = await getSecurityAlertsAPISupportedChainIds();
+    }
+  } catch (error: unknown) {
+    handlePPOMError(
+      error,
+      `Error fetching supported chains from security alerts API`,
+    );
+  }
+  return supportedChainIds.includes(chainId);
+}
+
+function normalizePPOMRequest(
+  request: PPOMRequest | JsonRpcRequest,
+): PPOMRequest | JsonRpcRequest {
+  if (
+    !((req): req is PPOMRequest => req.method === METHOD_SEND_TRANSACTION)(
+      request,
+    )
+  ) {
     return request;
   }
 
-  const transactionParams = (request.params?.[0] || {}) as TransactionParams;
+  const transactionParams = request.params[0];
   const normalizedParams = normalizeTransactionParams(transactionParams);
 
   return {
@@ -177,10 +233,12 @@ async function findConfirmationBySecurityAlertId(
 
 async function validateWithController(
   ppomController: PPOMController,
-  request: JsonRpcRequest,
+  request: SecurityAlertsAPIRequest | JsonRpcRequest,
+  chainId: string,
 ): Promise<SecurityAlertResponse> {
-  const response = (await ppomController.usePPOM((ppom: PPOM) =>
-    ppom.validateJsonRpc(request),
+  const response = (await ppomController.usePPOM(
+    (ppom: PPOM) => ppom.validateJsonRpc(request),
+    chainId,
   )) as SecurityAlertResponse;
 
   return {
@@ -192,7 +250,7 @@ async function validateWithController(
 async function validateWithAPI(
   ppomController: PPOMController,
   chainId: string,
-  request: JsonRpcRequest,
+  request: SecurityAlertsAPIRequest | JsonRpcRequest,
 ): Promise<SecurityAlertResponse> {
   try {
     const response = await validateWithSecurityAlertsAPI(chainId, request);
@@ -203,6 +261,6 @@ async function validateWithAPI(
     };
   } catch (error: unknown) {
     handlePPOMError(error, `Error validating request with security alerts API`);
-    return await validateWithController(ppomController, request);
+    return await validateWithController(ppomController, request, chainId);
   }
 }

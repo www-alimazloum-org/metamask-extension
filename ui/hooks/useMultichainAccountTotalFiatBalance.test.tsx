@@ -6,6 +6,7 @@ import mockState from '../../test/data/mock-state.json';
 import configureStore from '../store/store';
 import { createMockInternalAccount } from '../../test/jest/mocks';
 import { CHAIN_IDS } from '../../shared/constants/network';
+import { mockNetworkState } from '../../test/stub/networks';
 import { useMultichainAccountTotalFiatBalance } from './useMultichainAccountTotalFiatBalance';
 
 const mockTokenBalances = [
@@ -101,10 +102,8 @@ const renderUseMultichainAccountTotalFiatBalance = (
           },
         },
       },
-      providerConfig: {
-        chainId: CHAIN_IDS.MAINNET,
-        ticker: 'ETH',
-      },
+      ...mockNetworkState({ chainId: CHAIN_IDS.MAINNET }),
+
       detectedTokens: {
         '0x1': {
           '0x0836f5ed6b62baf60706fe3adc0ff0fd1df833da': [
@@ -142,6 +141,10 @@ describe('useMultichainAccountTotalFiatBalance', () => {
     expect(result.current).toStrictEqual({
       formattedFiat: '$9.41',
       loading: false,
+      mergedRates: {
+        '0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e': 3.304588,
+        '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48': 0.0006189,
+      },
       totalWeiBalance: '14ba1e6a08a9ed',
       tokensWithBalances: mockTokenBalances,
       totalFiatBalance: '9.41',
